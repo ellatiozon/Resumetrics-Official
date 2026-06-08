@@ -1,0 +1,9 @@
+# Python virtual environment
+backend/venv/
+backend/.env
+**/__pycache__/
+*.pyc
+
+# Node.js dependencies
+frontend/node_modules/
+frontend/dist/
