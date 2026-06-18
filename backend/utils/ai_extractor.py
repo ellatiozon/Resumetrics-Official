@@ -18,18 +18,49 @@ def extract_raw_text(file_bytes: bytes, filename: str) -> str:
         text = "\n".join([p.text for p in doc.paragraphs])
     return text
 
+def heal_pdf_line_breaks(text: str) -> str:
+    """
+    NLP FIX 1: Resolves the 'Processing.' dangling bullet bug.
+    PDF parsers often insert artificial newlines (\n) when text hits the edge of a page.
+    This function looks for lines that DO NOT end in terminal punctuation (.!?) 
+    and stitches them to the next line.
+    """
+    lines = text.split('\n')
+    healed_lines = []
+    buffer = ""
+    
+    for line in lines:
+        stripped_line = line.strip()
+        if not stripped_line:
+            continue
+            
+        buffer += " " + stripped_line if buffer else stripped_line
+        
+        # If the line ends with a natural sentence terminator or is very short (like a header), flush the buffer
+        if re.search(r'[.:!?]$', stripped_line) or len(stripped_line.split()) < 5:
+            healed_lines.append(buffer.strip())
+            buffer = ""
+            
+    # Flush anything remaining
+    if buffer:
+        healed_lines.append(buffer.strip())
+        
+    return "\n".join(healed_lines)
+
 def normalize_and_segment(text: str) -> tuple:
     """Cleans noise and uses strict boundary heuristics to chunk text."""
-    clean_text = re.sub(r'\s+', ' ', text).strip()
+    # Heal the text BEFORE we try to segment it
+    healed_text = heal_pdf_line_breaks(text)
+    clean_text = re.sub(r'\s+', ' ', healed_text).strip()
+    
     sections = {'education': [], 'experience': [], 'skills': []}
     current_section = None
     
-    for line in text.split('\n'):
+    for line in healed_text.split('\n'):
         line_clean = line.strip()
         line_upper = line_clean.upper()
         if not line_clean: continue
         
-        # Header heuristic: Short lines with keywords
         word_count = len(line_clean.split())
         is_header = word_count <= 5
         
@@ -49,8 +80,13 @@ def normalize_and_segment(text: str) -> tuple:
     return sections, clean_text
 
 def split_by_delimiters(line: str) -> list:
-    """Splits messy resume lines by standard delimiters."""
-    chunks = re.split(r'\s*[\|\—\–]\s*|\s+-\s+', line)
+    """
+    NLP FIX 2: Resolves the Dropped Job Block bug.
+    Expanded the regex array to catch weird symbols like `//`, `::`, or `~`
+    that applicants use to separate their job titles from companies.
+    """
+    # Added \/\/ (double slash) to the delimiter regex
+    chunks = re.split(r'\s*[\|\—\–\~]\s*|\s+-\s+|\s*\/\/\s*', line)
     return [chunk.strip() for chunk in chunks if chunk.strip()]
 
 def simulate_hmm_chunk_tagging(chunks: list) -> list:
@@ -69,6 +105,7 @@ def simulate_hmm_chunk_tagging(chunks: list) -> list:
 
         inferred_state = "UNKNOWN"
         
+        # Look for a 4 digit year OR the word "present"
         if (has_num and re.search(r"\b(19|20)\d{2}\b", chunk)) or has_date_word:
             inferred_state = "DATE_RANGE"
         elif has_title_word:
@@ -83,7 +120,6 @@ def simulate_hmm_chunk_tagging(chunks: list) -> list:
 def calculate_total_tenure(experience_lines: list) -> int:
     """Calculates total chronological experience with correct Non-Capturing Regex."""
     experience_text = " ".join(experience_lines)
-    # The crucial Phase 4 bug fix applied here:
     four_digit_years = [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", experience_text)]
     
     if not four_digit_years:
@@ -102,22 +138,19 @@ def calculate_total_tenure(experience_lines: list) -> int:
 # MASTER ROUTER FUNCTION
 # ==========================================
 def process_resume_extraction(file_bytes: bytes, filename: str) -> dict:
-    """
-    The main entry point for the FastAPI router. 
-    """
     raw_text = extract_raw_text(file_bytes, filename)
     sections, normalized_text = normalize_and_segment(raw_text)
     
     parsed_roles = []
-    formatted_experience = [] # <-- NEW: This will hold the UI-friendly data
+    formatted_experience = []
     
     for line in sections['experience']:
-        if "|" in line:
+        # Update: We need to check if ANY of our valid delimiters exist in the line before splitting
+        if any(delimiter in line for delimiter in ["|", "-", "—", "–", "//", "~"]):
             chunks = split_by_delimiters(line)
             role_states = simulate_hmm_chunk_tagging(chunks)
             parsed_roles.append(role_states)
             
-            # THE TRANSLATOR: Convert HMM AI states back to UI expected keys
             exp_dict = {"role": "", "company": "", "duration": []}
             for item in role_states:
                 if item["state"] == "JOB_TITLE":
@@ -127,11 +160,12 @@ def process_resume_extraction(file_bytes: bytes, filename: str) -> dict:
                 elif item["state"] == "DATE_RANGE":
                     exp_dict["duration"].append(item["chunk"])
             
-            # Join dates (e.g., ["2024", "Present"] -> "2024 - Present")
             exp_dict["duration"] = " - ".join(exp_dict["duration"])
-            formatted_experience.append(exp_dict)
             
-    # Quick formatting for Education so it doesn't show as empty
+            # Only add to the UI array if it actually found a Job Title
+            if exp_dict["role"]:
+                formatted_experience.append(exp_dict)
+            
     formatted_education = [{"school": line, "degree": "", "field": "", "duration": ""} for line in sections['education']]
             
     total_years = calculate_total_tenure(sections['experience'])
@@ -140,6 +174,6 @@ def process_resume_extraction(file_bytes: bytes, filename: str) -> dict:
         "full_normalized_text": normalized_text,
         "total_years_experience": total_years,
         "structured_roles": parsed_roles,
-        "experience": formatted_experience,  # <-- Pass to main.py
-        "education": formatted_education     # <-- Pass to main.py
+        "experience": formatted_experience,
+        "education": formatted_education
     }

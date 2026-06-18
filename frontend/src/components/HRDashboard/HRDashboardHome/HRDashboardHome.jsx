@@ -76,7 +76,6 @@ export default function HRHomeDashboard() {
     const handleApprove = (appId) => handleStatusUpdate(appId, "approve");
     const handleReject = (appId) => handleStatusUpdate(appId, "reject");
 
-    // ⭐ Helper: Dynamic Tier Colors
     const getTierColor = (tier) => {
         switch (tier) {
             case "HIGH ALIGNMENT": return { bg: "#d4edda", text: "#155724", border: "#c3e6cb" }; // Green
@@ -237,7 +236,7 @@ export default function HRHomeDashboard() {
                                                     <li key={idx}>{edu.school}</li>
                                                 ))}
                                             </ul>
-                                        ) : <sp>No education data parsed.</p>}
+                                        ) : <span>No education data parsed.</span>}
                                     </div>
                                     
                                     <div>

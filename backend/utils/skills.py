@@ -1,9 +1,6 @@
 from sentence_transformers import SentenceTransformer, util
 from rapidfuzz import fuzz
 
-# Initialize the model globally. 
-# Loading this outside of a function ensures it only loads into memory ONCE 
-# when the server starts, rather than adding a 5-second delay to every API request.
 sentence_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 def disambiguate_word_sense(target_word: str, context_text: str) -> str:
@@ -23,7 +20,7 @@ def disambiguate_word_sense(target_word: str, context_text: str) -> str:
             return f"Biological Organism (Bio Score: {bio_score} vs Tech Score: {tech_score})"
     return "Target Word Not Found in Context"
 
-def evaluate_semantic_alignment(resume_text: str, target_skills: list, threshold: float = 0.45) -> tuple:
+def evaluate_semantic_alignment(resume_text: str, target_skills: list, threshold: float = 0.38) -> tuple:
     """Generates Word Embeddings and calculates Cosine Similarity Matrices."""
     diagnostic_logs = []
     matched_skills = []
@@ -34,8 +31,8 @@ def evaluate_semantic_alignment(resume_text: str, target_skills: list, threshold
         skill_lower = skill.lower()
         resume_lower = resume_text.lower()
         
-        # A. Fast-Pass: Exact/Fuzzy Literal Match
-        if skill_lower in resume_lower or fuzz.partial_ratio(skill_lower, resume_lower) >= 85:
+        # Fast-Pass: Exact/Fuzzy Literal Match (Lowered ratio to 80 to catch plurals/minor typos)
+        if skill_lower in resume_lower or fuzz.partial_ratio(skill_lower, resume_lower) >= 80:
             matched_skills.append(skill)
             diagnostic_logs.append({
                 "skill": skill,
@@ -44,7 +41,7 @@ def evaluate_semantic_alignment(resume_text: str, target_skills: list, threshold
             })
             continue
             
-        # B. Semantic Fallback: Dense Vector Embedding
+        # Semantic Fallback: Dense Vector Embedding
         skill_tensor = sentence_model.encode([skill], convert_to_tensor=True)
         cosine_score = util.cos_sim(resume_tensor, skill_tensor).item()
         
@@ -54,6 +51,7 @@ def evaluate_semantic_alignment(resume_text: str, target_skills: list, threshold
             "score": round(cosine_score, 4)
         })
         
+        # NLP FIX 3: Lowered threshold from 0.45 to 0.38 to allow related tech stacks (e.g. AWS -> Cloud) to pass.
         if cosine_score >= threshold:
             matched_skills.append(skill)
             

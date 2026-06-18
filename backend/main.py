@@ -18,9 +18,7 @@ from database import resumes_collection, jobs_collection, hr_collection, users_c
 from utils.ai_extractor import process_resume_extraction
 from utils.skills import evaluate_semantic_alignment, evaluate_final_decision, generate_executive_summary
 
-# ===============================================================
-# 🧠 App Initialization
-# ===============================================================
+#App Initialization
 app = FastAPI(title="Resume Parser API + MongoDB Auth")
 
 app.add_middleware(
@@ -31,17 +29,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ===============================================================
-# ⚙️ Password hashing
-# ===============================================================
+
+#Password hashing
 pwd_context = CryptContext(
     schemes=["argon2"],
     deprecated="auto"
 )
 
-# ===============================================================
-# ⚙️ JWT Configuration
-# ===============================================================
+#JWT Configuration
 SECRET_KEY = "your_super_secret_key"  # Change in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -73,9 +68,7 @@ def get_current_user(authorization: str = Header(...)):
     token = authorization.split(" ")[1]
     return verify_token(token)
 
-# ===============================================================
-# ⚙️ Configure Tesseract for Windows
-# ===============================================================
+#Configure Tesseract for Windows
 if platform.system() == "Windows":
     possible_paths = [
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -86,9 +79,7 @@ if platform.system() == "Windows":
             pytesseract.pytesseract.tesseract_cmd = path
             break
 
-# ===============================================================
-# 🔐 Models
-# ===============================================================
+#Models
 class SignUpModel(BaseModel):
     firstName: str 
     lastName: str 
@@ -127,9 +118,7 @@ class JobModel(BaseModel):
     min_experience: int
     company_name: str | None = None
 
-# -------------------------
 # HR Signup Endpoint
-# -------------------------
 @app.post("/hr/signup")
 async def hr_signup(user: HRSignUpModel):
     # Check if email already exists
@@ -178,9 +167,7 @@ async def hr_login(user: LoginModel):
         "user": {"email": db_user["email"], "role": "hr"}
     }
 
-# ===============================================================
-# 🔐 Applicant Authentication Endpoints
-# ===============================================================
+#Applicant Authentication Endpoints
 @app.post("/signup")
 def signup(user: SignUpModel):
     # 1️⃣ Check passwords match
@@ -230,9 +217,7 @@ async def login(user: LoginModel):
         "user": {"email": db_user["email"], "role": "ap"}
     }
 
-# ===============================================================
-# 📄 Resume Parsing (Protected)
-# ===============================================================
+#Resume Parsing (Protected)
 @app.post("/analyze")
 async def analyze_resume(
     resume: UploadFile = File(...),
@@ -241,7 +226,7 @@ async def analyze_resume(
 ):
     filename = resume.filename.lower()
     
-    # 1. Fetch Job Requirements from MongoDB
+    #Fetch Job Requirements from MongoDB
     job = jobs_collection.find_one({"_id": ObjectId(job_id)})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -249,8 +234,7 @@ async def analyze_resume(
     target_skills = job.get("skills", [])
     job_min_exp = job.get("min_experience", 0)
 
-    # 2. Phase 1 & 2: Data Extraction & Structure (ai_extractor.py)
-    # Note: Our new pipeline specifically targets document structures (PDF/DOCX)
+    #Phase 1 & 2: Data Extraction & Structure (ai_extractor.py)
     if not filename.endswith((".pdf", ".docx", ".doc")):
         return JSONResponse({"error": "Only PDF and DOCX formats supported by the NLP pipeline"}, status_code=400)
         
@@ -264,14 +248,14 @@ async def analyze_resume(
     applicant_years = extracted_data["total_years_experience"]
     structured_roles = extracted_data["structured_roles"]
 
-    # 3. Phase 3: Semantic Vector Alignment (skills.py)
+    #Phase 3: Semantic Vector Alignment (skills.py)
     matched_skills, semantic_logs = evaluate_semantic_alignment(resume_text, target_skills)
     missing_skills = list(set(target_skills) - set(matched_skills))
 
-    # 4. Phase 4: Deterministic Decision Engine
+    #Phase 4: Deterministic Decision Engine
     decision = evaluate_final_decision(matched_skills, target_skills, applicant_years, job_min_exp)
 
-    # 5. Phase 5: NLG Executive Summary
+    #Phase 5: NLG Executive Summary
     # Attempt to dynamically pull their primary job title for the summary
     primary_role = "Professional"
     if structured_roles and len(structured_roles) > 0:
@@ -288,12 +272,11 @@ async def analyze_resume(
         primary_role=primary_role
     )
 
-    # 6. Construct the Ultimate HR Database Payload
     parsed_data = {
         "filename": resume.filename,
         "structured_roles": structured_roles,
-        "education": extracted_data["education"],     # <-- ADD THIS
-        "experience": extracted_data["experience"],   # <-- ADD THIS
+        "education": extracted_data["education"],    
+        "experience": extracted_data["experience"],   
         "total_experience_years": applicant_years,
         "min_experience_required": job_min_exp,
         "experience_met": decision["exp_flag"],
@@ -315,12 +298,7 @@ async def analyze_resume(
     
     return JSONResponse(content=parsed_data)
 
-# ===============================================================
-# 💼 Job Posting + Listing (HR Only)
-# ===============================================================
-
-
-
+#Job Posting + Listing (HR Only)
 def require_hr(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "hr":
         raise HTTPException(status_code=403, detail="HR access only")
@@ -329,14 +307,13 @@ def require_hr(current_user: dict = Depends(get_current_user)):
 
 @app.post("/jobs")
 async def create_job(job: JobModel, current_user: dict = Depends(require_hr)):
-    # Fetch HR info from database
     hr_user = hr_collection.find_one({"email": current_user["email"]})
     if not hr_user:
         raise HTTPException(status_code=404, detail="HR user not found")
 
     job_dict = job.model_dump()
     job_dict["created_by"] = current_user["email"]
-    job_dict["company_name"] = hr_user.get("company_name", "Unknown Company")  # Automatically set company name
+    job_dict["company_name"] = hr_user.get("company_name", "Unknown Company")  
 
     result = jobs_collection.insert_one(job_dict)
     job_dict["_id"] = str(result.inserted_id)
@@ -348,10 +325,8 @@ async def create_job(job: JobModel, current_user: dict = Depends(require_hr)):
 async def get_all_jobs(current_user: dict = Depends(get_current_user)):
     jobs = list(jobs_collection.find({}))
     for job in jobs:
-        # Convert ObjectId to string
         job["_id"] = str(job["_id"])
 
-        # Lookup HR info based on the email who created the job
         hr_user = hr_collection.find_one({"email": job.get("created_by")})
         job["company_name"] = hr_user.get("company_name") if hr_user else "Unknown Company"
         job["address"] = hr_user.get("address") if hr_user else "Address Not Available"
@@ -380,16 +355,12 @@ async def delete_job(job_id: str, current_user: dict = Depends(require_hr)):
     jobs_collection.delete_one({"_id": ObjectId(job_id)})
     return {"message": "Job deleted successfully"}
 
-# ===============================================================
-# 🚀 Root
-# ===============================================================
+# Root
 @app.get("/")
 def root():
     return {"message": "Welcome to the Resumetrics API 👋 (Windows OCR Ready + MongoDB Auth)"}
 
-# ===============================================================
-# 🧾 Skills Endpoint
-# ===============================================================
+# Skills Endpoint
 skills_df = pd.read_excel("skills_dataset.xlsx")
 skills_list = skills_df["Skills"].dropna().tolist()
 SKILLS_DB = skills_list
@@ -403,9 +374,7 @@ def get_skills(q: str = Query("", description="Search term for skills")):
     filtered = [s for s in skills_list if query in s.lower()]
     return JSONResponse(content=filtered[:10])
 
-# ===============================================================
-# 📝 Application Management Endpoints (HR Only)
-# ===============================================================
+# Application Management Endpoints (HR Only)
 @app.get("/applications")
 async def get_applications(current_user: dict = Depends(require_hr)):
     hr_email = current_user["email"]
@@ -444,7 +413,7 @@ async def get_applications(current_user: dict = Depends(require_hr)):
             "experience_met": app.get("experience_met", False),
             "min_experience_required": app.get("min_experience_required", 0),
             
-            # --- THE NEW AI METRICS ---
+            #NEW AI METRICS
             "missing_skills": app.get("missing_skills", []),
             "tier": app.get("tier", "UNCLASSIFIED"),
             "fraction_score": app.get("fraction_score", "N/A"),
@@ -487,7 +456,7 @@ async def update_application_status(
 async def get_approved_applications(current_user: dict = Depends(require_hr)):
     hr_email = current_user["email"]
 
-    # 1. Get IDs of jobs posted by the current HR user
+    #Get IDs of jobs posted by the current HR user
     jobs_posted = jobs_collection.find({"created_by": hr_email}, {"_id": 1, "title": 1})
     job_map = {str(job["_id"]): job["title"] for job in jobs_posted}
     job_ids = list(job_map.keys())
@@ -495,14 +464,14 @@ async def get_approved_applications(current_user: dict = Depends(require_hr)):
     if not job_ids:
         return []
 
-    # 2. Find applications that are 'Approved' AND belong to the HR's jobs
+    #Find applications that are 'Approved' AND belong to the HR's jobs
     applications = list(resumes_collection.find({
         "job_id": {"$in": job_ids},
         "application_status": "Approved",
         "submitted_by": {"$ne": hr_email}
     }))
 
-    # 3. Format the data for the frontend
+    #Format the data for the frontend
     formatted_applications = []
     for app in applications:
         application_job_id = app.get("job_id")
@@ -520,7 +489,7 @@ async def get_approved_applications(current_user: dict = Depends(require_hr)):
             "total_experience_years": app.get("total_experience_years", 0),
             "skills_matched": app.get("skills_matched", []),
             
-            # --- THE NEW AI METRICS ---
+            #NEW AI METRICS
             "missing_skills": app.get("missing_skills", []),
             "tier": app.get("tier", "UNCLASSIFIED"),
             "fraction_score": app.get("fraction_score", "N/A"),
@@ -546,7 +515,7 @@ async def get_my_applications(current_user: dict = Depends(get_current_user)):
         job_id_str = app.get("job_id")
         job_details = job_map.get(job_id_str)
 
-        # Lookup HR info to get company address
+        #Lookup HR info to get company address
         if job_details:
             hr_user = hr_collection.find_one({"email": job_details.get("created_by")})
             company_name = job_details.get("company_name", hr_user.get("company_name") if hr_user else "N/A")
@@ -569,9 +538,7 @@ async def get_my_applications(current_user: dict = Depends(get_current_user)):
     return my_applications_status
 
 
-# ===============================================================
-# 👤 User Profile Endpoint
-# ===============================================================
+#User Profile Endpoint
 @app.get("/user/me")
 async def get_user_profile(current_user: dict = Depends(get_current_user)):
     """
@@ -583,10 +550,7 @@ async def get_user_profile(current_user: dict = Depends(get_current_user)):
         "role": current_user["role"]
     }
 
-# ===============================================================
-# 👤 Applicant Account Management
-# ===============================================================
-
+#Applicant Account Management
 class AccountUpdateModel(BaseModel):
     firstName: str | None = None
     lastName: str | None = None
@@ -630,7 +594,7 @@ async def update_applicant_account(
     if update.lastName:
         update_fields["last_name"] = update.lastName
     if update.email:
-        # Check if new email already exists
+        #Check if new email already exists
         if users_collection.find_one({"email": update.email, "_id": {"$ne": user["_id"]}}):
             raise HTTPException(status_code=400, detail="Email already in use")
         update_fields["email"] = update.email.lower()
@@ -647,9 +611,7 @@ async def update_applicant_account(
 
     return {"message": "Account updated successfully"}
 
-# -------------------------
 # HR Account Update Model
-# -------------------------
 class HRAccountUpdateModel(BaseModel):
     companyName: str | None = None
     email: EmailStr | None = None
@@ -691,7 +653,7 @@ async def update_hr_account(
     if update.companyName:
         update_fields["company_name"] = update.companyName
     if update.email:
-        # Check if new email already exists
+        #Check if new email already exists
         if hr_collection.find_one({"email": update.email, "_id": {"$ne": hr_user["_id"]}}):
             raise HTTPException(status_code=400, detail="Email already in use")
         update_fields["email"] = update.email.lower()
@@ -716,9 +678,6 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
-
-
-# All other existing FastAPI code follows...
 
 
 
